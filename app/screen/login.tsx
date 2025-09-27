@@ -26,7 +26,7 @@ export default function Login() {
     pixel: require("../../assets/fonts/pixel.ttf"),
   });
 
-  const { login } = useAuth();
+  const { login, refreshProfile } = useAuth();
   const router = useRouter();
 
   // Mantén los hooks siempre en el mismo orden; este return temprano está bien
@@ -73,6 +73,9 @@ export default function Login() {
 
       if (Platform.OS === "web") {
         window.alert("✅ Bienvenido — Inicio de sesión exitoso");
+        // refrescar perfil para evitar estado desfasado
+        try { await refreshProfile(); } catch (e) { console.warn("refreshProfile failed:", e); }
+        // navegar (SPA) al home
         navigateToHome(target);
       } else {
         // Alert con callback y fallback por si el callback no se dispara
@@ -80,16 +83,21 @@ export default function Login() {
         Alert.alert("✅ Bienvenido", "Inicio de sesión exitoso", [
           {
             text: "OK",
-            onPress: () => {
+            onPress: async () => {
               navigated = true;
+              try { await refreshProfile(); } catch (e) { console.warn("refreshProfile failed:", e); }
               navigateToHome(target);
             },
           },
         ]);
-        setTimeout(() => {
-          if (!navigated) navigateToHome(target);
+        setTimeout(async () => {
+          if (!navigated) {
+            try { await refreshProfile(); } catch (e) { console.warn("refreshProfile failed:", e); }
+            navigateToHome(target);
+          }
         }, 350);
       }
+
     } catch (e: any) {
       console.error("Error en handleLogin:", e);
       if (Platform.OS === "web") window.alert("Ocurrió un problema al iniciar sesión");

@@ -56,12 +56,14 @@ export default function Register() {
     } else {
       const okMsg = message || "Registro exitoso";
       setFeedback("✅ " + okMsg + " — redirigiendo...");
-      if (Platform.OS === "web") {
+            if (Platform.OS === "web") {
         window.alert("✅ " + okMsg);
-        router.replace("/screen/login");
+        // Forzamos recarga y navegamos a login (full page load)
+        window.location.replace("/screen/login");
       } else {
         setTimeout(() => router.replace("/screen/login"), 1200);
       }
+
     }
   };
 

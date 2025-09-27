@@ -259,10 +259,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
-  const logout = async () => {
-    await supabase.auth.signOut();
-    setUser(null);
+    const logout = async () => {
+    try {
+      await supabase.auth.signOut();
+      setUser(null);
+      // Web: forzamos recarga y redirección a pantalla de login
+      if (typeof window !== "undefined") {
+        // Reemplaza la URL actual por la de login y fuerza reload.
+        // Usamos replace para no dejar la página previa en el history.
+        window.location.replace("/screen/login");
+      }
+      // En native dejamos que la app maneje la navegación (no forzamos)
+    } catch (e) {
+      console.error("logout error:", e);
+      setUser(null);
+    }
   };
+
 
   return (
     <AuthContext.Provider value={{ user, loading, register, login, logout, refreshProfile, updateProfile }}>
