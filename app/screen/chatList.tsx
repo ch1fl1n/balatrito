@@ -1,80 +1,90 @@
-// app/screen/ChatList.tsx
+// app/screen/ChatList.tsx (resumido, reemplaza tu archivo)
 import React, { useEffect, useState } from "react";
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native";
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Modal, TextInput, Alert, Image } from "react-native";
 import { useRouter } from "expo-router";
 import { supabase } from "../../UTILS/supabase";
 import { useAuth } from "../../CONTEXTS/authContext";
+import { useData } from "../../CONTEXTS/DataContext";
+import { getOrCreateChatBetween } from "../../UTILS/ChatHelpers";
 
-type Chat = {
-  id: string;
-  user_id: string;
-  user_id2: string;
-  created_at: string;
-  updated_at: string;
-  other?: { id: string; username?: string; email?: string; avatar_url?: string | null };
-  last_message?: { text: string; created_at: string } | null;
-};
+const styles = StyleSheet.create({
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    backgroundColor: "#f9f9f9",
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  circle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#6a25ff",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  title: {
+    fontWeight: "600",
+    fontSize: 16,
+    marginBottom: 4,
+  },
+  subtitle: {
+    color: "#666",
+    fontSize: 14,
+  },
+  time: {
+    color: "#999",
+    fontSize: 12,
+  },
+});
 
 export default function ChatList() {
   const { user } = useAuth();
   const router = useRouter();
+  const { contacts, addContactByEmail, fetchUsers } = useData();
   const [loading, setLoading] = useState(true);
-  const [chats, setChats] = useState<Chat[]>([]);
-
-    if (!user?.id) {
-    return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <Text>Cargando usuario...</Text>
-      </View>
-    );
-  }
+  const [chats, setChats] = useState<any[]>([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [email, setEmail] = useState("");
 
   useEffect(() => {
     if (!user?.id) return;
     fetchChats();
-
-    // subscribe to new chats (optional)
     const sub = supabase
       .channel(`chats-list-${user.id}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "chats", filter: `user_id=eq.${user.id}` },
-        (payload) => {
-          fetchChats();
-        }
+        () => fetchChats()
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "chats", filter: `user_id2=eq.${user.id}` },
-        (payload) => {
-          fetchChats();
-        }
+        () => fetchChats()
       )
       .subscribe();
-
     return () => {
-      supabase.removeChannel(sub);
+      (async () => {
+        await supabase.removeChannel(sub);
+      })();
     };
   }, [user?.id]);
 
   async function fetchChats() {
     setLoading(true);
     try {
-      // obtener chats donde user es user_id o user_id2
       const { data: rows, error } = await supabase
         .from("chats")
         .select(`id, user_id, user_id2, created_at, updated_at,
-          messages:messages(id, text, created_at)`)
+          messages:messages(id, text, created_at, sent_by)`)
         .or(`user_id.eq.${user?.id},user_id2.eq.${user?.id}`)
         .order("updated_at", { ascending: false });
 
-      if (error) {
-        console.error("fetchChats error", error);
-        setChats([]);
-        return;
-      }
+      if (error) throw error;
 
-      const list: Chat[] = (rows || []).map((r: any) => {
+      const list = (rows || []).map((r: any) => {
         const otherId = user && r.user_id === user.id ? r.user_id2 : r.user_id;
         const lastMsg = (r.messages && r.messages.length) ? r.messages[r.messages.length - 1] : null;
         return {
@@ -83,22 +93,22 @@ export default function ChatList() {
           user_id2: r.user_id2,
           created_at: r.created_at,
           updated_at: r.updated_at,
-          last_message: lastMsg ? { text: lastMsg.text, created_at: lastMsg.created_at } : null,
+          last_message: lastMsg ? { text: lastMsg.text, created_at: lastMsg.created_at, media_url: lastMsg.media_url } : null,
           other: { id: otherId },
         };
       });
 
-      // ahora fetch nombres/avatars de los "other" en batch
+      // obtener perfiles en batch
       const others = Array.from(new Set(list.map((c) => c.other?.id))).filter(Boolean) as string[];
       if (others.length) {
-        const { data: profiles } = await supabase.from("profiles").select("id, username, avatar_url").in("id", others);
-        const byId = (profiles || []).reduce((acc: any, p: any) => (acc[p.id] = p, acc), {});
+        const { data: profiles } = await supabase.from("profiles").select("id, username, avatar_url, email").in("id", others);
+        const byId = (profiles || []).reduce((acc: any, p: any) => ((acc[p.id] = p), acc), {});
         list.forEach((c) => (c.other = { ...c.other, ...byId[c.other!.id] }));
       }
 
       setChats(list);
     } catch (e) {
-      console.error(e);
+      console.error("fetchChats", e);
       setChats([]);
     } finally {
       setLoading(false);
@@ -106,18 +116,42 @@ export default function ChatList() {
   }
 
   function openChat(chatId: string, otherId?: string) {
-    router.push({ pathname: "/screen/ChatRoom", params: { chatId, otherId } });
+    router.push({ pathname: "/screen/chatRoom", params: { chatId, otherId } });
   }
 
-  function renderItem({ item }: { item: Chat }) {
+  async function onAddContact() {
+    if (!email.trim()) return Alert.alert("Error", "Ingresa un email");
+    const profile = await addContactByEmail(email.trim().toLowerCase());
+    setShowAdd(false);
+    setEmail("");
+    if (!profile) return Alert.alert("No encontrado", "No existe un usuario con ese email");
+    // crear chat y abrir
+    try {
+      const chat = await getOrCreateChatBetween(user!.id, profile.id);
+      if (chat?.id) {
+        openChat(chat.id, profile.id);
+      }
+    } catch (e) {
+      console.error(e);
+      Alert.alert("Error", "No se pudo crear el chat");
+    }
+  }
+
+  function renderItem({ item }: { item: any }) {
     return (
       <TouchableOpacity style={styles.row} onPress={() => openChat(item.id, item.other?.id)}>
+        {/* avatar */}
         <View style={styles.circle}>
-          <Text style={{ color: "#fff" }}>{(item.other?.username || "U").slice(0,1).toUpperCase()}</Text>
+          {item.other?.avatar_url ? (
+            // usa expo-image o Image simple
+            <Image source={{ uri: item.other.avatar_url }} style={{ width: 48, height: 48, borderRadius: 24 }} />
+          ) : (
+            <Text style={{ color: "#fff" }}>{(item.other?.username || "U").slice(0, 1).toUpperCase()}</Text>
+          )}
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.title}>{item.other?.username || "Usuario"}</Text>
-          <Text numberOfLines={1} style={styles.subtitle}>{item.last_message?.text ?? "Sin mensajes aún"}</Text>
+          <Text style={styles.title}>{item.other?.username || item.other?.email || "Usuario"}</Text>
+          <Text numberOfLines={1} style={styles.subtitle}>{item.last_message?.text ?? (item.last_message?.media_url ? "📷 Media" : "Sin mensajes aún")}</Text>
         </View>
         <Text style={styles.time}>{item.updated_at ? new Date(item.updated_at).toLocaleTimeString() : ""}</Text>
       </TouchableOpacity>
@@ -126,7 +160,12 @@ export default function ChatList() {
 
   return (
     <View style={{ flex: 1, backgroundColor: "#fff" }}>
+      <TouchableOpacity onPress={() => setShowAdd(true)} style={{ padding: 12, backgroundColor: "#6a25ff", margin: 12, borderRadius: 8, alignItems: "center" }}>
+        <Text style={{ color: "#fff" }}>+ Agregar contacto por email</Text>
+      </TouchableOpacity>
+
       {loading ? <ActivityIndicator style={{ marginTop: 20 }} /> : null}
+
       <FlatList
         data={chats}
         keyExtractor={(i) => i.id}
@@ -135,14 +174,19 @@ export default function ChatList() {
         contentContainerStyle={{ padding: 12 }}
         ListEmptyComponent={() => !loading ? <Text style={{ textAlign: "center", marginTop: 40 }}>No tienes conversaciones</Text> : null}
       />
+
+      <Modal visible={showAdd} animationType="slide" transparent>
+        <View style={{ flex: 1, justifyContent: "center", backgroundColor: "rgba(0,0,0,0.4)" }}>
+          <View style={{ margin: 20, padding: 16, backgroundColor: "#fff", borderRadius: 8 }}>
+            <Text style={{ fontWeight: "600", marginBottom: 8 }}>Agregar contacto por email</Text>
+            <TextInput placeholder="email@ejemplo.com" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" style={{ borderWidth: 1, borderColor: "#eee", padding: 8, borderRadius: 6, marginBottom: 12 }} />
+            <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
+              <TouchableOpacity onPress={() => setShowAdd(false)} style={{ marginRight: 12 }}><Text>Cancelar</Text></TouchableOpacity>
+              <TouchableOpacity onPress={onAddContact} style={{ backgroundColor: "#6a25ff", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6 }}><Text style={{ color: "#fff" }}>Agregar</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  row: { flexDirection: "row", alignItems: "center", paddingVertical: 10 },
-  circle: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#6a25ff", alignItems: "center", justifyContent: "center", marginRight: 12 },
-  title: { fontWeight: "600" },
-  subtitle: { color: "#666", fontSize: 13 },
-  time: { fontSize: 12, color: "#999", marginLeft: 8 }
-});

@@ -4,6 +4,59 @@ import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, Keyboard
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { supabase } from "../../UTILS/supabase";
 import { useAuth } from "../../CONTEXTS/authContext";
+import * as ImagePicker from "expo-image-picker";
+import { Image } from "react-native";
+import { touchChatUpdatedAt } from "../../UTILS/ChatHelpers";
+
+async function pickAndSendMedia(chatId: string, user: { id: string }) {
+  // pedir permiso
+  const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!perm.granted) return alert("Permiso denegado");
+  const res = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ImagePicker.MediaTypeOptions.All,
+    quality: 0.7,
+  });
+  if (res.canceled) return;
+  try {
+    const uri = res.assets?.[0]?.uri; // expo sdk 49+ uses assets
+    const ext = uri.split(".").pop();
+    const filename = `${chatId}/${Date.now()}.${ext}`;
+    // convertir a blob
+    const blob = await (await fetch(uri)).blob();
+    const { error: uploadError } = await supabase.storage.from("chat-media").upload(filename, blob, {
+      contentType: blob.type,
+      upsert: false,
+    });
+    if (uploadError) throw uploadError;
+    const { data: publicData } = supabase.storage.from("chat-media").getPublicUrl(filename);
+    const media_url = publicData.publicUrl;
+    // insertar mensaje con media_url
+    await supabase.from("messages").insert({
+      chat_id: chatId,
+      text: "", // opcional
+      media_url,
+      sent_by: user?.id,
+    });
+    // actualizar updated_at del chat
+    await touchChatUpdatedAt(chatId);
+  } catch (e) {
+    console.error("pickAndSendMedia", e);
+    alert("Error al subir media");
+  }
+}
+
+async function sendMessage(text: string, user: { id: string }, chatId: string, setText: React.Dispatch<React.SetStateAction<string>>) {
+  if ((!text.trim()) || !user?.id || !chatId) return;
+  const payload: any = { chat_id: chatId, text: text.trim(), sent_by: user.id };
+  setText("");
+  const { data, error } = await supabase.from("messages").insert(payload).select().single();
+  if (error) {
+    console.error("sendMessage error", error);
+    return;
+  }
+  // opcional: tocar updated_at
+  await touchChatUpdatedAt(chatId);
+}
 
 type Message = {
   id: string;
@@ -71,20 +124,20 @@ export default function ChatRoom() {
     }
   }
 
-  async function sendMessage() {
-    if (!text.trim() || !user?.id || !chatId) return;
-    const payload = { chat_id: chatId, text: text.trim(), sent_by: user.id };
-    setText("");
-
-    // Insert; Supabase RLS requires sent_by === auth.uid()
-    const { data, error } = await supabase.from("messages").insert(payload).select().single();
-    if (error) {
-      console.error("sendMessage error", error);
-      // Optionally: show error and re-add message to input
-      return;
-    }
-    // realtime subscription will append the message — but we can optimistically append too
-  }
+  async function sendMessage(text: string, user: { id: string }, chatId: string) {
+        if (!text.trim() || !user?.id || !chatId) return;
+        const payload = { chat_id: chatId, text: text.trim(), sent_by: user.id };
+        setText("");
+    
+        // Insert; Supabase RLS requires sent_by === auth.uid()
+        const { data, error } = await supabase.from("messages").insert(payload).select().single();
+        if (error) {
+          console.error("sendMessage error", error);
+          // Optionally: show error and re-add message to input
+          return;
+        }
+        // realtime subscription will append the message — but we can optimistically append too
+      }
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -110,7 +163,7 @@ export default function ChatRoom() {
             style={styles.input}
             multiline
           />
-          <TouchableOpacity onPress={sendMessage} style={styles.sendBtn}>
+          <TouchableOpacity onPress={() => user && sendMessage(text, user, chatId)} style={styles.sendBtn}>
             <Text style={{ color: "#fff" }}>Enviar</Text>
           </TouchableOpacity>
         </View>
