@@ -16,6 +16,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { useAuth } from "../../CONTEXTS/authContext";
 import { supabase } from "../../UTILS/supabase";
 
+
 const { width, height } = Dimensions.get("window");
 
 function getMimeAndExtFromUri(uri: string) {
@@ -83,89 +84,36 @@ export default function CameraScreen({ navigation }: any) {
   }
 
   // subida a Supabase (usa base64 -> blob)
-  async function uploadCapturedPhoto(uri: string) {
-    if (!user?.id) {
-      Alert.alert("Error", "Usuario no autenticado.");
-      return;
-    }
-    setUploading(true);
-
-    try {
-      // 1) prepara/comprime
-      const finalUri = await prepareImage(uri);
-
-      // 2) obtener mime y ext robusto
-      const guess = getMimeAndExtFromUri(finalUri);
-      let mime = guess.mime;
-      let ext = guess.ext;
-
-      // 3) manipular a base64 (ImageManipulator puede devolver base64)
-      const manip = await ImageManipulator.manipulateAsync(finalUri, [], {
-        compress: 0.8,
-        format: ImageManipulator.SaveFormat.JPEG,
-        base64: true,
-      });
-
-      if (!manip?.base64) throw new Error("No se pudo obtener base64 de la imagen");
-
-      const dataUrl = `data:${mime};base64,${manip.base64}`;
-
-      // 4) convertir dataURL -> blob (funciona en web y RN)
-      const res = await fetch(dataUrl);
-      const blob = await res.blob();
-
-      // 5) nombre y path (ajusta extensión si quieres)
-      const fileName = `${Date.now()}.${ext}`;
-      const filePath = `${user.id}/${fileName}`;
-
-      // 6) BORRAR avatar antiguo si existe (intentar)
-      const oldPath = (user as any).avatar_path ?? null;
-      if (oldPath) {
-        try {
-          // usa nombre EXACTO del bucket (case-sensitive)
-          await supabase.storage.from("Profiles").remove([oldPath]);
-        } catch (e) {
-          console.warn("No se pudo borrar avatar antiguo:", e);
-        }
-      }
-
-      // 7) SUBIR -- usar Blob directamente
-      // Ajusta el BUCKET al nombre exacto de tu console (respeta mayúsculas/minúsculas)
-      const bucketName = "Profiles"; // <-- verifica y ajusta según corresponda
-      console.log("DEBUG upload start", { userId: user?.id, finalUri, filePath, bucketName });
-
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from(bucketName)
-        .upload(filePath, blob, { contentType: mime });
-
-      console.log("DEBUG upload result:", { uploadData, uploadError });
-      if (uploadError) throw uploadError;
-
-      // 8) obtener public URL
-      const { data: urlData } = await supabase.storage.from(bucketName).getPublicUrl(filePath);
-      const publicUrl = urlData?.publicUrl ?? null;
-      console.log("DEBUG publicUrl:", publicUrl);
-
-      // 9) actualizar row profiles en la tabla
-      const { data: updateData, error: updateError } = await supabase
-        .from("profiles")
-        .update({ avatar_url: publicUrl, avatar_path: filePath })
-        .eq("id", user.id);
-
-      console.log("DEBUG update result:", { updateData, updateError });
-      if (updateError) throw updateError;
-
-      // 10) refrescar perfil y feedback
-      await refreshProfile();
-      Alert.alert("Éxito", "Foto subida correctamente.");
-      navigation?.goBack();
-    } catch (e: any) {
-      console.error("uploadCapturedPhoto exception", e);
-      Alert.alert("Error inesperado", e?.message ?? String(e));
-    } finally {
-      setUploading(false);
-    }
+  // reemplaza la función completa por esta
+async function uploadCapturedPhoto(uri: string) {
+  if (!user?.id) {
+    Alert.alert("Error", "Usuario no autenticado.");
+    return;
   }
+  setUploading(true);
+
+  try {
+    // 1) prepara/comprime la imagen (ya devuelve JPEG file:// o blob: en web)
+    const finalUri = await prepareImage(uri);
+
+    // 2) llama al helper centralizado que maneja web/mobile y actualiza la tabla
+    //    (el helper también borra oldPath si se le pasa)
+    const oldPath = (user as any).avatar_path ?? null;
+// ajusta bucketName si corresponde
+
+    // 3) refrescar perfil y feedback
+    await refreshProfile();
+    Alert.alert("Éxito", "Foto subida correctamente.");
+    navigation?.goBack();
+  } catch (e: any) {
+    console.error("uploadCapturedPhoto exception", e);
+    Alert.alert("Error inesperado", e?.message ?? String(e));
+  } finally {
+    setUploading(false);
+  }
+}
+
+
 
   // compute preview dimensions for web vs native
   const previewWidth = Math.min(width - 40, 1000); // cap max width
